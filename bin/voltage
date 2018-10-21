@@ -1,0 +1,4 @@
+#!/bin/bash
+#set -x
+# CORE Voltage
+vcgencmd measure_volts core|cut -f 2 -d "="|cut -f 1 -d "V"

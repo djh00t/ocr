@@ -1,0 +1,11 @@
+#!/bin/bash
+# Get Temperature of Raspberry PI 2
+# Version 1.0
+
+calc () {
+        awk "BEGIN { print $* }"
+}
+
+TEMP=`cat /sys/class/thermal/thermal_zone0/temp`
+
+calc $TEMP/1000

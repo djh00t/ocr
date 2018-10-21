@@ -1,0 +1,4 @@
+#!/bin/bash
+#set -x
+# CPU Frequency
+expr `vcgencmd measure_clock arm|cut -f 2 -d "="` / 1000000

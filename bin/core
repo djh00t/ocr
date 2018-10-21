@@ -1,0 +1,4 @@
+#!/bin/bash
+#set -x
+# CORE Frequency
+expr `vcgencmd measure_clock core|cut -f 2 -d "="` / 1000000

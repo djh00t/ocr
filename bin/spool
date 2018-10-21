@@ -1,0 +1,162 @@
+#!/bin/bash
+##
+## Operation Cliff Richard
+## Spool Sender Script
+##
+## Version 0.1
+##
+## Written by: David Hooton - david@hooton.org
+##
+
+### HEADER ###
+
+LOCKFILE="/var/lock/`basename $0`"
+LOCKFD=99
+
+# PRIVATE
+_lock()             { flock -$1 $LOCKFD; }
+_no_more_locking()  { _lock u; _lock xn && rm -f $LOCKFILE; }
+_prepare_locking()  { eval "exec $LOCKFD>\"$LOCKFILE\""; trap _no_more_locking EXIT; }
+
+# ON START
+_prepare_locking
+
+# PUBLIC
+exlock_now()        { _lock xn; }  # obtain an exclusive lock immediately or fail
+exlock()            { _lock x; }   # obtain an exclusive lock
+shlock()            { _lock s; }   # obtain a shared lock
+unlock()            { _lock u; }   # drop a lock
+
+### BEGIN OF SCRIPT ###
+
+# Simplest example is avoiding running multiple instances of script.
+exlock_now || exit 1
+
+# Remember! Lock file is removed when one of the scripts exits and it is
+#           the only script holding the lock or lock is not acquired at all.
+
+
+# App Variables
+LOG_TAG="ocr-spool:"
+
+# Local Environment
+DIR=/root/scripts/OCR
+BINDIR=$DIR/bin
+LIBDIR=$DIR/lib
+WORKDIR=$DIR/work
+ARCHIVEDIR=$DIR/archive
+SPOOLDIR=$DIR/spool
+NOW=`date "+%Y-%m-%d-%I-%M"`
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Get array of filenames
+FILES=( `ls $SPOOLDIR` )
+
+# External Links
+# Link to API code
+MOTHER_URL="http://xxx.xxxx.xxx/API/api.php"
+UBI_AUTHURI="http://things.ubidots.com/api/v1.6/auth/token"
+UBI_VARURI="http://things.ubidots.com/api/v1.6/variables"
+
+# Keys below defined in host rollout config
+UBI_APIKEY=`cat /etc/rollout/ubidots_apikey`
+UBI_MACKEY=`cat /etc/rollout/ubidots_mackey`
+UBI_TEMPKEY=`cat /etc/rollout/ubidots_tempkey`
+UBI_CPUKEY=`cat /etc/rollout/ubidots_cpukey`
+UBI_COREKEY=`cat /etc/rollout/ubidots_corekey`
+UBI_VOLTKEY=`cat /etc/rollout/ubidots_voltkey`
+UBI_UPTIMEKEY=`cat /etc/rollout/ubidots_uptimekey`
+
+#logger -i -t $LOG_TAG "UBI_APIKEY=$UBI_APIKEY"
+#logger -i -t $LOG_TAG "UBI_MACKEY=$UBI_MACKEY"
+#logger -i -t $LOG_TAG "UBI_TEMPKEY=$UBI_TEMPKEY"
+
+
+# Local Binaries
+wget="/usr/bin/wget"
+SED="/bin/sed"
+
+##
+## UPLOAD PROCESSED DATA
+##
+
+jsonvalue() {
+	# EXTRACT JSON VALUES EASILY
+	KEY=$1
+	num=$2
+	awk -F"[,:}]" '{for(i=1;i<=NF;i++){if($i~/'$KEY'\042/){print $(i+1)}}}' | tr -d '"' | sed -n ${num}p
+}
+
+rawurlencode() {
+  local string="${1}"
+  local strlen=${#string}
+  local encoded=""
+
+  for (( pos=0 ; pos<strlen ; pos++ )); do
+     c=${string:$pos:1}
+     case "$c" in
+        [-_.~a-zA-Z0-9] ) o="${c}" ;;
+        * )               printf -v o '%%%02x' "'$c"
+     esac
+     encoded+="${o}"
+  done
+  echo "${encoded}"    # You can either set a return variable (FASTER) 
+  REPLY="${encoded}"   #+or echo the result (EASIER)... or both... :p
+}
+
+do_report_data_mysql() {
+	# Send logged data to mothership
+	# Set Delimiter
+        IFS=','
+	while read f1 f2 f3 f4 f5;
+	do
+		# URL ENCODE MAC
+		EMAC=`echo $( rawurlencode "$f1" )`
+
+		# URL ENCODE VENDOR
+		EVENDOR=`echo $( rawurlencode "$f2" )`
+
+		# URL ENCODE FIRST
+		EFIRST=`echo $( rawurlencode "$f3" )`
+
+		# URL ENCODE LAST
+		ELAST=`echo $( rawurlencode "$f4" )`
+
+		# URL ENCODE RSSI
+		RSSI=`echo $( rawurlencode "$f5" )`
+
+		URL=`echo -e "${MOTHER_URL}?mac=${EMAC}&vendor=${EVENDOR}&first=${EFIRST}&last=${ELAST}&node=${HOSTNAME}&rssi=${RSSI}"`
+
+		logger -i -t $LOG_TAG "ET PHONE HOME URL is $URL"
+
+		curl --data-urlencode -S -X GET $URL
+
+	done < $SPOOLDIR/$i
+}
+
+do_archive_spool() {
+
+        mv $SPOOLDIR/$i $ARCHIVEDIR
+	gzip $ARCHIVEDIR/$i
+}
+
+
+##
+##	RUN PROGRAM
+##
+logger -i -t $LOG_TAG "$LOG_TAG Start."
+
+	# Wait a few seconds for everything to relax
+	sleep 5
+
+	# Upload RAW Data
+
+	for i in "${FILES[@]}";
+	do
+		do_report_data_mysql
+		do_archive_spool
+	done
+logger -i -t $LOG_TAG "$LOG_TAG Finished."
+exit 0
+
+

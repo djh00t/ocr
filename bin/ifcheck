@@ -1,0 +1,13 @@
+#!/bin/bash
+t2='eth1'
+t1=$(ifconfig | grep -o $t2)
+
+if [ "$t1" = "$t2" ]; then
+        echo -e "$t2 up"
+else
+        echo "$t2 down"
+        /usr/sbin/usb_modeswitch -v 12d1 -p 1f1c -W -I -M 55534243123456780000000000000011062000000101000100000000000000
+	ifup $t2
+fi
+
+exit

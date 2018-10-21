@@ -1,0 +1,38 @@
+#!/bin/bash
+
+## VPN Checker - Runs every minute via cron
+vpn="on"
+
+# Check if ppp0 exists, if it does exit
+if [ -e /sys/class/net/ppp0 ]; 
+	then
+		echo "ppp0 exists, exiting."
+		exit 0
+fi
+
+# Check if eth1 exists, if not exit we will try next time script runs
+if [ ! -e /sys/class/net/eth1 ]; 
+        then
+		echo "eth1 does not exist, exiting."
+                exit 0
+fi
+
+# Make Sure that 4G is up, if not wait for it
+while [ 1 ]; do
+  if [ $(ip add sh dev eth1 | grep inet | wc -l) -ne 0 ]; then
+     break
+  fi
+  printf "\nWaiting 5 seconds for 4G dongle.\n"
+  sleep 5
+
+done
+
+# Start VPN
+echo "Starting ppp0."
+
+if [ $vpn = on ]; then
+        printf "\nVPN connection to OCRVPN\n"
+        /usr/bin/pon OCRVPN
+fi
+
+exit 0

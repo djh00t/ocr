@@ -1,0 +1,7 @@
+#!/bin/bash
+DIR=/root/scripts/OCR
+LIBDIR=$DIR/lib
+OUI=$(echo ${1//[:.- ]/} | tr "[a-f]" "[A-F]" | egrep -o "^[0-9A-F]{6}")
+
+grep $OUI $LIBDIR/oui.16
+

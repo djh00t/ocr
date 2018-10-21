@@ -1,0 +1,419 @@
+#!/bin/bash
+##
+## Operation Cliff Richard
+## Data Polling Script
+##
+## Version 0.1
+##
+## Written by: David Hooton -david@hooton.org
+##
+
+### HEADER ###
+
+LOCKFILE="/var/lock/`basename $0`"
+LOCKFD=99
+
+# PRIVATE
+_lock()             { flock -$1 $LOCKFD; }
+_no_more_locking()  { _lock u; _lock xn && rm -f $LOCKFILE; }
+_prepare_locking()  { eval "exec $LOCKFD>\"$LOCKFILE\""; trap _no_more_locking EXIT; }
+
+# ON START
+_prepare_locking
+
+# PUBLIC
+exlock_now()        { _lock xn; }  # obtain an exclusive lock immediately or fail
+exlock()            { _lock x; }   # obtain an exclusive lock
+shlock()            { _lock s; }   # obtain a shared lock
+unlock()            { _lock u; }   # drop a lock
+
+### BEGIN OF SCRIPT ###
+
+# Simplest example is avoiding running multiple instances of script.
+exlock_now || exit 1
+
+# Remember! Lock file is removed when one of the scripts exits and it is
+#           the only script holding the lock or lock is not acquired at all.
+
+
+# App Variables
+LOG_TAG="ocr-scan:"
+SNIFFTIME="50"
+WIFI_INT=wlan0
+MON_INT=mon0
+
+# Local Environment
+DIR=/root/scripts/OCR
+BINDIR=$DIR/bin
+LIBDIR=$DIR/lib
+WORKDIR=$DIR/work
+ARCHIVEDIR=$DIR/archive
+SPOOLDIR=$DIR/spool
+NOW=`date "+%Y-%m-%d-%I-%M"`
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# External Links
+# API URL
+MOTHER_URL="http://api.xxx.xxx/API/api.php"
+OUIURL="http://api.xxx.xxx/conf/root/scripts/OCR/0.1/lib/"
+OUIFILE="oui.txt"
+OUIHEX="oui.hex"
+OUI16="oui.16"
+UBI_AUTHURI="http://things.ubidots.com/api/v1.6/auth/token"
+UBI_VARURI="http://things.ubidots.com/api/v1.6/variables"
+
+# Local Binaries
+wget="/usr/bin/wget"
+SED="/bin/sed"
+
+##
+## DATA PROCESSING
+##
+data_do_remove_header () {
+	# Remove Data from top of file until you hit $1
+	logger -i -t $LOG_TAG "Trimming Data Header.";
+	$SED -i -n "/$STRING/,$ p" $DATA_FILE;
+}
+
+
+data_do_remove_whitespace () {
+	# Remove whitespace from file
+	logger -i -t $LOG_TAG "Removing Whitespace.";
+
+	# Remove White Lines
+	$SED -i '/^[[:space:]]*$/d' $DATA_FILE;
+
+	# Remove CSV Leading Spaces
+	$SED -i 's/, /,/g' $DATA_FILE
+}
+
+data_do_remove_top_line () {
+	# Remove Header Line From File
+	logger -i -t $LOG_TAG "Removing CSV Header Line.";
+	$SED -i -e "1d" $DATA_FILE;
+}
+
+data_do_extract_lines () {
+	# Extract Lines Containing $1
+	logger -i -t $LOG_TAG "Extracting $STRING.";
+	$SED '/'"$STRING"'/!d' $DATA;
+}
+
+data_do_remove_first_2_char () {
+	logger -i -t $LOG_TAG "Removing first 2 chars from each line.";
+	$SED -i 's/^..//' $DATA_FILE;
+}
+
+##
+## SETUP ENVIRONMENT
+##
+
+do_check_dirs () {
+	# Make sure all required directories exist
+
+	# Main Application Directory
+	if [ ! -d "$DIR" ]; then
+		logger -i -t $LOG_TAG "Creating $DIR."
+		mkdir -p $DIR
+	fi
+
+	# Libraries Directory
+	if [ ! -d "$LIBDIR" ]; then
+		logger -i -t $LOG_TAG "Creating $LIBDIR."
+		mkdir -p $LIBDIR
+	fi
+
+	# Working Directory
+	if [ ! -d "$WORKDIR" ]; then
+		logger -i -t $LOG_TAG "Creating $WORKDIR."
+		mkdir -p $WORKDIR
+	fi
+
+	# NOW Working Directory
+	if [ ! -d "$WORKDIR/$NOW" ]; then
+		logger -i -t $LOG_TAG "Creating $WORKDIR/$NOW."
+		mkdir -p $WORKDIR/$NOW
+	fi
+
+	# Spool Directory
+	if [ ! -d "$SPOOLDIR" ]; then
+		logger -i -t $LOG_TAG "Creating $SPOOLDIR."
+		mkdir -p $SPOOLDIR
+	fi
+
+	# Archive Directory
+	if [ ! -d "$ARCHIVEDIR" ]; then
+		logger -i -t $LOG_TAG "Creating $ARCHIVEDIR."
+		mkdir -p $ARCHIVEDIR
+	fi
+}
+
+do_get_oui_file () {
+	# Download IEEE OUI MAC Lookup DB
+
+	# Make Sure Library Directory Exists
+	if [ ! -d "$LIBDIR" ]; then
+		logger -i -t $LOG_TAG "Creating $LIBDIR."
+		mkdir -p $LIBDIR
+	fi
+
+	# Check if OUI File Exists, skip if it does
+	if [ -f "$LIBDIR/$OUIFILE" ]; then
+
+		logger -i -t $LOG_TAG "IEEE OIU DB Exists."
+#	# If it doesn't download it
+	else
+		logger -i -t $LOG_TAG "Getting IEEE OIU DB."
+		cd $LIBDIR
+		$wget -o /dev/null -O $LIBDIR/$OUIFILE $OUIURL/$OUIFILE
+
+		if [ $? -eq 0 ]; then
+			logger -i -t $LOG_TAG "Downloaded OK."
+		else
+			logger -i -t $LOG_TAG "Download Failed."
+			exit 1
+		fi
+
+	fi
+
+	# Make Summarised Files
+	do_make_oui_16_file
+
+	do_make_oui_hex_file
+
+	# Install Lookup Tool
+	do_install_oui_lookup_tool
+	cd
+}
+
+do_make_oui_16_file () {
+	DATA=$LIBDIR/$OUIFILE
+	DATA_FILE=$LIBDIR/$OUI16
+
+	if [ ! -f $DATA_FILE ]; then
+	logger -i -t $LOG_TAG "Creating OUI 16 File."
+		# Summarise OUI File into Base 16 .16 file
+		STRING="(base 16)"
+		data_do_extract_lines > $DATA_FILE
+		data_do_remove_first_2_char
+		$SED -i 's/     '"$STRING"'\t\t/,/g' $DATA_FILE
+		# Remove all but the first two columns
+		mv $DATA_FILE $DATA_FILE.tmp
+		cut -d, -f3-200 --complement $DATA_FILE.tmp > $DATA_FILE
+		rm $DATA_FILE.tmp
+	logger -i -t $LOG_TAG "OUI 16 File Installed."
+	fi
+}
+
+do_make_oui_hex_file () {
+	DATA=$LIBDIR/$OUIFILE
+	DATA_FILE=$LIBDIR/$OUIHEX
+
+	if [ ! -f $DATA_FILE ]; then
+	logger -i -t $LOG_TAG "Creating OUI HEX File."
+		# Summarise OUI File into hex .sum file
+		STRING="(hex)"
+		data_do_extract_lines > $DATA_FILE
+		data_do_remove_first_2_char
+		$SED -i 's/   '$STRING'\t\t/,/g' $DATA_FILE
+		# Remove all but the first two columns
+		mv $DATA_FILE $DATA_FILE.tmp
+		cut -d, -f3-200 --complement $DATA_FILE.tmp > $DATA_FILE
+		rm $DATA_FILE.tmp
+	logger -i -t $LOG_TAG "OUI HEX File Installed."
+	fi
+}
+
+do_install_oui_lookup_tool () {
+	if [ ! -f $LIBDIR/oui ]; then
+		# Install OUI IEEE MAC Address Lookup Tool
+		logger -i -t $LOG_TAG "Installing OUI IEEE MAC Address Lookup Tool."
+		echo "#!/bin/bash" > $LIBDIR/oui
+		echo 'DIR=/root/scripts/OCR' >> $LIBDIR/oui
+		echo 'LIBDIR=$DIR/lib' >> $LIBDIR/oui
+		echo 'OUI=$(echo ${1//[:.- ]/} | tr "[a-f]" "[A-F]" | egrep -o "^[0-9A-F]{6}")' >> $LIBDIR/oui
+		echo >> $LIBDIR/oui
+		echo 'grep $OUI $LIBDIR/oui.16' >> $LIBDIR/oui
+		echo  >> $LIBDIR/oui
+
+		chmod +x $LIBDIR/oui
+		logger -i -t $LOG_TAG "OUI IEEE MAC Address Lookup Tool Installed."
+	fi
+}
+
+do_check_wlan0 () {
+	t2=$WIFI_INT
+	t1=$(ifconfig -a $t2)
+
+	if [ $? = 0 ]; then
+	        logger -i -t $LOG_TAG -e "$t2 exists, OK."
+	else
+	        logger -i -t $LOG_TAG "$t2 doesn't exist, Quitting."
+		exit 1
+	fi
+}
+
+##
+## DATA COLLECTION
+##
+
+do_collect_data () {
+	# Collect Mac Addresses
+	logger -i -t $LOG_TAG "Collecting WiFi Data for $SNIFFTIME Seconds."
+	# Run in $DIR
+	cd $DIR
+
+	# Check Wireless Interface Exists and is Ready
+	#do_check_wlan0
+
+	# Start WLAN_INT Monitor Mode
+	logger -i -t $LOG_TAG "Turning $WIFI_INT into Monitor Mode."
+	/usr/local/sbin/airmon-ng start $WIFI_INT 0
+
+	# Run sniffer for $SNIFFTIME mins
+	logger -i -t $LOG_TAG "Collecting WiFi Data."
+	/usr/bin/timeout --foreground $SNIFFTIME /usr/local/sbin/airodump-ng -w $HOSTNAME --output-format csv $MON_INT
+
+	# Stop WLAN_INT Monitor Mode
+	logger -i -t $LOG_TAG "Removing $MON_INT."
+	/usr/local/sbin/airmon-ng stop $MON_INT
+}
+
+
+
+##
+## PROCESS COLLECTED DATA
+##
+
+do_process_collected_data () {
+	logger -i -t $LOG_TAG "Processing Collected Data."
+
+	# Set Delimiter
+	IFS=','
+
+	# Set Data File Name
+	DATA_FILE=$HOSTNAME-01.csv
+	SCRATCHDIR=$WORKDIR/$NOW
+	DATA_OUT=$SCRATCHDIR/$DATA_FILE.OUT
+
+	# Collect Data
+	mv $DIR/$DATA_FILE $SCRATCHDIR
+
+	# Backup RAW Data
+	logger -i -t $LOG_TAG "Archiving RAW Data to > $ARCHIVEDIR/$NOW-$HOSTNAME.raw"
+	cp $SCRATCHDIR/$DATA_FILE $ARCHIVEDIR/$NOW-$HOSTNAME.raw
+	gzip $ARCHIVEDIR/$NOW-$HOSTNAME.raw
+
+	# Move to $SCRATCHDIR
+	cd $SCRATCHDIR
+
+	# Remove Access Point Data
+	logger -i -t $LOG_TAG "Tidying up Data."
+	STRING="Station MAC"
+	data_do_remove_header
+
+	# Remove Column Header Row
+	data_do_remove_top_line
+
+	# Remove Whitespace
+	data_do_remove_whitespace
+
+	# Remove all but the first three columns
+	cut -d,  -f5-200 --complement $DATA_FILE > $DATA_FILE.cut
+
+	# Lookup MAC Addresses - Via LocalDB and Insert Vendor into CSV
+	while read f1 f2 f3 f4; do
+		VENDOR=`$LIBDIR/oui $f1 | cut -d ',' -f 2`
+		echo -e "$f1,$VENDOR,$f2,$f3,$f4" >> $DATA_OUT
+	done < $DATA_FILE.cut
+	logger -i -t $LOG_TAG "Data Tidy."
+
+
+	# Cleanup Scratch
+	logger -i -t $LOG_TAG "Cleaning Scratch."
+
+	# Remove $DATA_FILE.cut file
+	rm $SCRATCHDIR/$DATA_FILE.cut
+
+	# Remove $DATA_FILE file pre-column removal
+	rm $SCRATCHDIR/$DATA_FILE
+
+	# Rename processed data to $DATA_FILE
+	mv $DATA_OUT $SCRATCHDIR/$DATA_FILE
+
+	# Move Processed Data to Spool for Uploading
+	logger -i -t $LOG_TAG "Sending Processed Data to Spool > $SPOOLDIR/$NOW-$HOSTNAME.csv"
+	mv $SCRATCHDIR/$DATA_FILE $SPOOLDIR/$NOW-$HOSTNAME.csv
+
+	# Remove Scratch Dir
+	rm -rf $SCRATCHDIR
+	cd
+
+	# Log the results to syslog
+	while read line
+	do
+		logger -i -t $LOG_TAG RECORD: $line
+	done < $SPOOLDIR/$NOW-$HOSTNAME.csv
+
+}
+
+
+##
+## UPLOAD PROCESSED DATA
+##
+
+jsonvalue () {
+	# EXTRACT JSON VALUES EASILY
+	KEY=$1
+	num=$2
+	awk -F"[,:}]" '{for(i=1;i<=NF;i++){if($i~/'$KEY'\042/){print $(i+1)}}}' | tr -d '"' | sed -n ${num}p
+}
+
+#do_et_phone_home () {
+#	# Send logged data to mothership
+#	# Set Delimiter
+#       IFS=','
+#	while read f1 f2 f3 f4; do
+#	URL=`echo -e "${MOTHER_URL}?mac=${f1}&vendor=${f2}&first=${f3}&last=${f4}&node=${HOSTNAME}"`
+#	echo $URL
+#	logger -i -t $LOG_TAG "ET PHONE HOME URL is $URL"
+#
+#	curl -S -X GET "$URL"
+#
+#        done < $SPOOLDIR/$NOW-$HOSTNAME.csv
+#}
+
+##
+## ARCHIVE DATA
+##
+
+
+##
+## UPLOAD ARCHIVED DATA
+##
+
+
+
+##
+##	RUN PROGRAM
+##
+logger -i -t $LOG_TAG "$LOG_TAG Start."
+	# Check Environment
+	echo checkdirs
+	do_check_dirs
+	do_get_oui_file
+
+
+	# Collect Data
+	do_collect_data
+
+
+	# Process Data
+	do_process_collected_data
+
+	# Upload Data
+#	do_report_macs_ubidots
+#	do_report_temp_ubidots
+#	do_et_phone_home
+logger -i -t $LOG_TAG "$LOG_TAG Finished."
+exit 0

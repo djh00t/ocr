@@ -1,0 +1,11 @@
+#!/bin/bash
+# Calculate number of Days uptime
+
+calc () {
+        awk "BEGIN { print $* }"
+}
+
+upSeconds="$(cat /proc/uptime | grep -o '^[0-9]\+')"
+
+upMins=$((${upSeconds} / 60))
+calc $upMins/1440

@@ -1,0 +1,70 @@
+#!/bin/bash
+##
+## Upload Spooled Files to Google Sheets
+##
+
+# DISABLED
+exit 0
+
+### HEADER ###
+
+LOCKFILE="/var/lock/`basename $0`"
+LOCKFD=99
+
+# PRIVATE
+_lock()             { flock -$1 $LOCKFD; }
+_no_more_locking()  { _lock u; _lock xn && rm -f $LOCKFILE; }
+_prepare_locking()  { eval "exec $LOCKFD>\"$LOCKFILE\""; trap _no_more_locking EXIT; }
+
+# ON START
+_prepare_locking
+
+# PUBLIC
+exlock_now()        { _lock xn; }  # obtain an exclusive lock immediately or fail
+exlock()            { _lock x; }   # obtain an exclusive lock
+shlock()            { _lock s; }   # obtain a shared lock
+unlock()            { _lock u; }   # drop a lock
+
+### BEGIN OF SCRIPT ###
+
+# Simplest example is avoiding running multiple instances of script.
+exlock_now || exit 1
+
+# Remember! Lock file is removed when one of the scripts exits and it is
+#           the only script holding the lock or lock is not acquired at all.
+
+
+
+# Local Environment
+DIR=/root/scripts/OCR
+LIBDIR=$DIR/lib
+BINDIR=$DIR/bin
+WORKDIR=$DIR/work
+ARCHIVEDIR=$DIR/archive
+SPOOLDIR=$DIR/spool
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Get array of filenames
+FILES=( `ls $SPOOLDIR` )
+
+
+# Loop through all files in spool directory
+for i in "${FILES[@]}"
+
+do
+	echo $i
+	sed -i 's/ /\%20/g' $SPOOLDIR/$i
+	# Read Data, Send to Sheets
+        while read f1 f2 f3 f4;
+	do
+		# Set Delimiter
+		IFS=','
+		echo $BINDIR/post_sheet $f1 $f2 $f3 $f4
+		$BINDIR/post_sheet $f1 $f2 $f3 $f4 2>&1
+
+        done < $SPOOLDIR/$i
+	mv $SPOOLDIR/$i $ARCHIVEDIR
+
+done
+
+exit 0
